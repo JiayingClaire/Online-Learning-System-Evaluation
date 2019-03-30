@@ -1,0 +1,536 @@
+---
+title: "Online Education System Evaluation"
+author: "Claire Jiaying Wu"
+date: "07 Feb 2019"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_chunk$set(echo = TRUE, eval = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55), tidy = TRUE)
+```
+
+```{r libraries}
+library(prettydoc)
+library(data.table)
+library(DT)
+library(stringr)
+library(ggpubr)
+library(corrplot)
+```
+
+```{r constants}
+id.name <- "Student ID"
+id.name.pattern <- "Student "
+id.name.new <- "Numeric ID"
+
+file.pk <- "../homework 1/Data/Prior Courses.csv"
+file.kc1 <- "../homework 1/Data/Knowledge Check -- Level 2.csv"
+file.kc2 <- "../homework 1/Data/Knowledge Check -- Level 5.csv"
+file.grades <- "../homework 1/Data/Grades.csv"
+
+pk.level.name <- "Prior Knowledge Level"
+
+trig.name <- "Trigonometry"
+calc.name <- "Calculus"
+
+num.digits <- 2
+threshold.kc1 <- 2
+threshold.kc2 <- 5
+
+homework.topics <- c("Homework Grade_Mechanics", "Homework Grade_Momentum", "Homework Grade_Gravity", 
+                     "Homework Grade_Electricity", "Homework Grade_Magnetism", "Homework Grade_Relativity")
+
+total.min.spent <- c("Level 2_Mechanics_Time Spend", "Level 2_Momentum_Time Spend", "Level 2_Gravity_Time Spend", 
+                     "Level 5_Mechanics_Time Spend", "Level 5_Momentum_Time Spend", "Level 5_Gravity_Time Spend", 
+                     "Level 5_Electricity_Time Spend", "Level 5_Magnetism_Time Spend", "Level 5_Relativity_Time Spend")
+
+score.kc2.names <- c("Level 5_Mechanics", "Level 5_Momentum", "Level 5_Gravity", 
+                     "Level 5_Electricity", "Level 5_Magnetism", "Level 5_Relativity")
+```
+
+```{r source_files}
+
+```
+
+```{r functions}
+max.with.na <- function(x){
+  y <- as.numeric(x[!is.na(as.numeric(x))])
+  if(length(y) == 0){
+    return(NA_real_)
+  }
+  if(length(y) > 0){
+    return(x = max(y, na.rm = TRUE))
+  }
+}
+
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+
+display.multiple.records <- function(x){
+  y <- x[, N := .N, by = id.name]
+  return(setorderv(y[N > 1]))
+}
+
+summarize.pk.class <- function(dataset, class_name){
+  num_scores <- dataset[, .(num_scores = length(get(class_name)))]
+  num_students <- dataset[, .(num_students = length(unique(get(id.name))))]
+  mean_scores <- dataset[, .(mean_scores = round.numerics(mean(get(class_name), na.rm = TRUE), digits = 2))]
+  sd_scores <- dataset[, .(sd_scores = round.numerics(sd(get(class_name), na.rm = TRUE), digits = 2))]
+  info <- data.table(class_name, num_scores, num_students, mean_scores, sd_scores)
+  return(datatable(data = info, rownames = FALSE))
+}
+
+add.numeric.id <- function(dataset){
+  dataset[, eval(id.name.new) := as.numeric(gsub(pattern = id.name.pattern, replacement = "", x = get(id.name)))]
+  return(dataset[c(1:3, 98:100),])
+}
+
+summarize.kc1.topic <- function(dataset, topic){
+  num_students <- dataset[, .(num_students = (sum(!is.na(get(topic)))))]
+  mean_score <- dataset[, .(mean_score = round.numerics(mean(get(topic), na.rm = TRUE), digits = 2))]
+  sd_score <- dataset[, .(sd_score = round.numerics(sd(get(topic), na.rm = TRUE), digits = 2))]
+  pass_percent <- dataset[get(topic) >= threshold.kc1, .N] / dat.kc1[, .N] * 100
+  mean_min <- dataset[, .(mean_min = round.numerics(mean(get(paste(topic,'_Time Spend', sep="")), na.rm = TRUE), digits = 2))]
+  sd_min <- dataset[, .(sd_min = round.numerics(sd(get(paste(topic,'_Time Spend', sep="")), na.rm = TRUE), digits = 2))]
+  return(data.table(topic, num_students, mean_score, sd_score, pass_percent, mean_min, sd_min))
+}
+
+summarize.kc2.topic <- function(dataset, topic){
+  num_students <- dataset[, .(num_students = (sum(!is.na(get(topic)))))]
+  mean_score <- dataset[, .(mean_score = round.numerics(mean(get(topic), na.rm = TRUE), digits = 2))]
+  sd_score <- dataset[, .(sd_score = round.numerics(sd(get(topic), na.rm = TRUE), digits = 2))]
+  pass_percent <- dataset[get(topic) >= threshold.kc2, .N] / dat.kc1[, .N] * 100
+  mean_min <- dataset[, .(mean_min = round.numerics(mean(get(paste(topic,'_Time Spend', sep="")), na.rm = TRUE), digits = 2))]
+  sd_min <- dataset[, .(sd_min = round.numerics(sd(get(paste(topic,'_Time Spend', sep="")), na.rm = TRUE), digits = 2))]
+  return(data.table(topic, num_students, mean_score, sd_score, pass_percent, mean_min, sd_min))
+}
+
+summarize.hw.class <- function(dataset, score_item){
+  student_count <- dataset[, .(student_count = (sum(!is.na(get(score_item)))))]
+  score_mean <- dataset[, .(score_mean = (mean(get(score_item), na.rm = TRUE)))]
+  score_sd <- dataset[, .(score_sd = (sd(get(score_item), na.rm = TRUE)))]
+  return(data.table(score_item, student_count, score_mean, score_sd))
+}
+```
+
+
+```{r question1, echo=FALSE, eval=TRUE}
+question.counter <- 1
+```
+
+## Inspections - dimensions
+
+```{r read_data}
+dat.pk <- fread(input = file.pk)
+dat.kc1 <- fread(input = file.kc1)
+dat.kc2 <- fread(input = file.kc2)
+dat.grades <- fread(input = file.grades)
+```
+
+#### Prior Knowledge
+```{r dim_pk}
+dim(dat.pk)
+```
+
+#### Knowledge Check 1
+```{r dim_kc1}
+dim(dat.kc1)
+```
+
+#### Knowledge Check 2
+```{r dim_kc2}
+dim(dat.kc2)
+```
+
+#### Grades
+```{r dim_grades}
+dim(dat.grades)
+```
+
+```{r num_unique_students}
+# How many unique students were in the class?
+dat.pk[, length(unique(get(id.name)))]
+dat.kc1[, length(unique(get(id.name)))]
+dat.kc2[, length(unique(get(id.name)))]
+dat.grades[, length(unique(get(id.name)))]
+```
+
+```{r question2, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Inspections - multiple records
+
+Which files (if any) contain more than 1 row per student?  
+
+#### Prior Knowledge
+```{r mult_rows_pk}
+dup.pk = display.multiple.records(dat.pk)
+datatable(data = dup.pk[,-'N'], rownames = FALSE)
+```
+
+#### Knowledge Check 1
+```{r mult_rows_kc1}
+dup.kc1 = display.multiple.records(dat.kc1)
+datatable(data = dup.kc1[,-'N'], rownames = FALSE)
+```
+
+#### Knowledge Check 2
+```{r mult_rows_kc2}
+dup.kc2 = display.multiple.records(dat.kc2)
+datatable(data = dup.kc2[,-'N'], rownames = FALSE)
+```
+
+#### Grades
+```{r mult_rows_grades}
+dup.grades = display.multiple.records(dat.grades)
+datatable(data = dup.grades[,-'N'], rownames = FALSE)
+```
+
+```{r question3, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Cleaning - Reduction to a Single Record
+
+To handle the students with multiple records, we decided to summarize their prior knowledge as follows:
+
+* For each student, the highest score in a prior class will be used.  If no numeric record is included, an NA value should be used.  For reference, we have provided a function called **max.with.na** that can perform this calculation for a single student.
+
+* We will also create an overall score called `r pk.level.name`.  For each student, this will be defined as the average of the student's highest score in `r trig.name` and the student's highest score in `r calc.name`.  For students who did not take both of these classes, the overall score will be based on the measured values.
+
+### a) Summary Before the Reduction  
+
+Starting with the original table of Prior Knowledge scores, compute the following for each class:  the number of measured records, the number of unique students with a measured record, the average score among all of the measured records, and the standard deviation of the scores among all of the measured records. Write a function called **summarize.pk.class** that will display the name of the prior class along with these figures using the **datatable** method from the **DT** package.
+
+```{r clean_the_characters, echo=FALSE, eval=TRUE}
+dat.pk[c(85,18), Trigonometry := NA]
+dat.pk[, Trigonometry := as.numeric(Trigonometry)]
+```
+
+#### `r trig.name`
+
+```{r pre_summary_trig}
+summarize.pk.class(dat.pk, trig.name)
+```
+
+#### `r calc.name`
+
+```{r pre_summary_calc}
+summarize.pk.class(dat.pk, calc.name)
+```
+
+### b) Reduction of Information
+
+Create a new table called **pk.reduced** that will contain 1 record per student according to the criteria specified above.  For the students with multiple records in the original file, display their records in the **pk.reduced** table using the **datatable** function in the **DT** package.
+
+```{r create_pk.reduced}
+# Remove the multiple records first
+pk.reduced <- dat.pk[-c(57,66,76,101,102,103), -'N']
+
+# Process the function "max.with.na" and add back the records to "pk.reduced"
+class.variables <- c(trig.name, calc.name)
+st57 <- dat.pk[c(57,101), lapply(X = .SD, FUN = "max.with.na"), .SDcols = class.variables]
+st66 <- dat.pk[c(66,102), lapply(X = .SD, FUN = "max.with.na"), .SDcols = class.variables]
+st76 <- dat.pk[c(76,103), lapply(X = .SD, FUN = "max.with.na"), .SDcols = class.variables]
+st57[, "Student ID" := "Student 57"]
+st66[, "Student ID" := "Student 66"]
+st76[, "Student ID" := "Student 76"]
+pk.reduced <- rbindlist(l = list(pk.reduced, st57, st66, st76), fill = TRUE)
+
+# Display the results by datatable function
+datatable(data = pk.reduced[98:100,], rownames = FALSE)
+```
+
+### c) Summary After the Reduction
+
+Using the **pk.reduced** table, compute the following for each class and the `r pk.level.name`:  the number of measured records, the number of unique students with a measured record, the average score among all of the measured records, and the standard deviation of the scores among all of the measured records.
+
+#### `r trig.name`
+
+```{r post_summary_trig}
+summarize.pk.class(pk.reduced, trig.name)
+```
+
+#### `r calc.name`
+
+```{r post_summary_calc}
+summarize.pk.class(pk.reduced, calc.name)
+```
+
+#### `r pk.level.name`
+
+```{r post_summary_overall}
+pk.reduced[, Level := rowMeans(.SD, na.rm = TRUE), by = id.name, .SDcols = class.variables]
+summarize.pk.class(pk.reduced, 'Level')
+```
+
+```{r question4, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+### Combining the Tables - one comprehensive table called **dat**
+
+```{r add_new_ids}
+# Add New (numeric) ID for each table using new defined function "add.numeric.id"
+# Display the first and the last three rows as double check
+
+add.numeric.id(pk.reduced)
+add.numeric.id(dat.kc1)
+add.numeric.id(dat.kc2)
+add.numeric.id(dat.grades)
+```
+
+```{r rename_columns}
+# Set new column names for each table
+
+# First table, Prior Knowledge
+old.names = c("Trigonometry", "Calculus")
+new.names = c("Prior Knowledge_Trigonometry", "Prior Knowledge_Calculus")
+pk.reduced <- setnames(pk.reduced, old = old.names, new = new.names)
+
+# Second table, Knowledge Check 1
+old.names = c("Mechanics", "Momentum", "Gravity", "Time: Mechanics", "Time: Momentum", "Time: Gravity")
+new.names = c("Level 2_Mechanics", "Level 2_Momentum", "Level 2_Gravity", "Level 2_Mechanics_Time Spend", 
+              "Level 2_Momentum_Time Spend", "Level 2_Gravity_Time Spend")
+dat.kc1 <- setnames(dat.kc1, old = old.names, new = new.names)
+
+# Third table, Knowledge Check 2
+old.names = c("Mechanics", "Momentum", "Gravity", "Electricity", "Magnetism", "Relativity", 
+              "Time: Mechanics", "Time: Momentum", "Time: Gravity", 
+              "Time: Electricity", "Time: Magnetism", "Time: Relativity")
+new.names = c("Level 5_Mechanics", "Level 5_Momentum", "Level 5_Gravity", 
+              "Level 5_Electricity", "Level 5_Magnetism", "Level 5_Relativity",
+              "Level 5_Mechanics_Time Spend", "Level 5_Momentum_Time Spend", "Level 5_Gravity_Time Spend",
+              "Level 5_Electricity_Time Spend", "Level 5_Magnetism_Time Spend", "Level 5_Relativity_Time Spend")
+dat.kc2 <- setnames(dat.kc2, old = old.names, new = new.names)
+
+# Last table, Grades
+old.names = c("HW 1: Mechanics", "HW 2: Momentum", "HW 3: Gravity", 
+              "HW 4: Electricity", "HW 5: Magnetism", "HW 6: Relativity")
+new.names = c("Homework Grade_Mechanics", "Homework Grade_Momentum", "Homework Grade_Gravity", 
+              "Homework Grade_Electricity", "Homework Grade_Magnetism", "Homework Grade_Relativity")
+dat.grades <- setnames(dat.grades, old = old.names, new = new.names)
+```
+
+```{r merge_four_tables}
+# Merge the four tables using "merge" function
+dat <- merge(x = pk.reduced, y = dat.kc1[, -'Student ID'], by = id.name.new, all.x = TRUE, all.y = FALSE)
+dat <- merge(x = dat, y = dat.kc2[, -'Student ID'], by = id.name.new, all.x = TRUE, all.y = FALSE)
+dat <- merge(x = dat, y = dat.grades[, -'Student ID'], by = id.name.new, all.x = TRUE, all.y = FALSE)
+
+# Set the table order by student id, increasing
+dat <- setorderv(x = dat, cols = id.name.new, order = 1)
+dat <- dat[, -c('Numeric ID', 'N', 'N.x', 'N.y')]
+
+# Round the numeric variables to two digits
+dat <- dat[, lapply(X = .SD, FUN = 'round.numerics', digits = 2)]
+
+# Display the dat table by datatable function in DT
+datatable(data = dat, rownames = FALSE)
+```
+
+```{r question5, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Evaluation - Knowledge Check 1
+
+How did the students do on the first knowledge check? 
+
+```{r summary_kc1}
+# Compute the variables by the new defined function "summarize.kc1.topic"
+topic1 <- summarize.kc1.topic(dat.kc1, 'Level 2_Mechanics')
+topic2 <- summarize.kc1.topic(dat.kc1, 'Level 2_Momentum')
+topic3 <- summarize.kc1.topic(dat.kc1, 'Level 2_Gravity')
+
+# Combine the topics for kc1
+summary_kc1 <- rbindlist(l = list(topic1, topic2, topic3), fill = TRUE)
+
+# Display by the datatable function
+datatable(data = summary_kc1, rownames = FALSE)
+```
+
+
+```{r question6, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Evaluation - Knowledge Check 2
+
+How did the students do on the second knowledge check? 
+
+```{r summary_kc2}
+# Compute the variables by the new defined function "summarize.kc2.topic"
+topic2.1 <- summarize.kc2.topic(dat.kc2, 'Level 5_Mechanics')
+topic2.2 <- summarize.kc2.topic(dat.kc2, 'Level 5_Momentum')
+topic2.3 <- summarize.kc2.topic(dat.kc2, 'Level 5_Gravity')
+topic2.4 <- summarize.kc2.topic(dat.kc2, 'Level 5_Electricity')
+topic2.5 <- summarize.kc2.topic(dat.kc2, 'Level 5_Magnetism')
+topic2.6 <- summarize.kc2.topic(dat.kc2, 'Level 5_Relativity')
+
+# Combine the topics for kc1
+summary_kc2 <- rbindlist(l = list(topic2.1, topic2.2, topic2.3, topic2.4, topic2.5, topic2.6), fill = TRUE)
+
+# Display by the datatable function
+datatable(data = summary_kc2, rownames = FALSE)
+```
+
+
+```{r question7, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Evaluation - Is Time Spent Time Well Used?
+
+```{r correlation_kc_time}
+# Calculate correlation for Knowledge Check 1
+level2.1 <- cor(x = dat.kc1$`Level 2_Mechanics`, y = dat.kc1$`Level 2_Mechanics_Time Spend`, use = "complete.obs")
+level2.2 <- cor(x = dat.kc1$`Level 2_Momentum`, y = dat.kc1$`Level 2_Momentum_Time Spend`, use = "complete.obs")
+level2.3 <- cor(x = dat.kc1$`Level 2_Gravity`, y = dat.kc1$`Level 2_Gravity_Time Spend`, use = "complete.obs")
+Knowledge_Check <- "Level 2"
+Topic <- c("Mechanics", "Momentum", "Gravity")
+Correlation <- c(level2.1, level2.2, level2.3)
+corr_kc2 <- data.table(Knowledge_Check, Topic, Correlation)
+
+# Calculate correlation for Knowledge Check 2
+level5.1 <- cor(x = dat.kc2$`Level 5_Mechanics`, y = dat.kc2$`Level 5_Mechanics_Time Spend`, use = "complete.obs")
+level5.2 <- cor(x = dat.kc2$`Level 5_Momentum`, y = dat.kc2$`Level 5_Momentum_Time Spend`, use = "complete.obs")
+level5.3 <- cor(x = dat.kc2$`Level 5_Gravity`, y = dat.kc2$`Level 5_Gravity_Time Spend`, use = "complete.obs")
+level5.4 <- cor(x = dat.kc2$`Level 5_Electricity`, y = dat.kc2$`Level 5_Electricity_Time Spend`, use = "complete.obs")
+level5.5 <- cor(x = dat.kc2$`Level 5_Magnetism`, y = dat.kc2$`Level 5_Magnetism_Time Spend`, use = "complete.obs")
+level5.6 <- cor(x = dat.kc2$`Level 5_Relativity`, y = dat.kc2$`Level 5_Relativity_Time Spend`, use = "complete.obs")
+Knowledge_Check5 <- "Level 5"
+Topic5 <- c("Mechanics", "Momentum", "Gravity", "Electricity", "Magnetism", "Relativity")
+Correlation5 <- c(level5.1, level5.2, level5.3, level5.4, level5.5, level5.6)
+corr_kc5 <- data.table(Knowledge_Check5, Topic5, Correlation5)
+
+# Combine the two correlations together and show by datatable function in DT
+corr_kc <- rbindlist(l = list(corr_kc2, corr_kc5), fill = FALSE)
+corr_kc <- corr_kc[, lapply(X = .SD, FUN = "round.numerics", digits = 2)]
+datatable(data = corr_kc, rownames = FALSE)
+```
+
+**Comment:** Before I saw the data results, I don't think spending more time on the digital system is beneficial. And my guessing is confirmed by the data as above - all the small negative correlation coefficients showing no direct correlations between the time spent and the scores. Rather, we can see that the correlation coefficients of level 5 become smaller than that of level 2, which may indicate that the system potentially has negative influence on students' scores. 
+
+We could also examine the correlations between time spent and scores **through visualization**:
+
+```{r combining_level_2_rows}
+# Combine all the scores for Knowledge Check 1
+level2_1 <- dat.kc1[, c('Level 2_Mechanics', 'Level 2_Mechanics_Time Spend')]
+level2_2 <- dat.kc1[, c('Level 2_Momentum', 'Level 2_Momentum_Time Spend')]
+level2_3 <- dat.kc1[, c('Level 2_Gravity', 'Level 2_Gravity_Time Spend')]
+dat.kc.reshape2 <- rbindlist(l = list(level2_1, level2_2, level2_3), fill = FALSE)
+dat.kc.reshape2 <- setnames(dat.kc.reshape2, 
+                            old = c('Level 2_Mechanics','Level 2_Mechanics_Time Spend'), 
+                            new = c('Scores','Time_Spent'))
+
+# Draw the plot with regression line
+ggscatter(dat.kc.reshape2, x = "Time_Spent", y = "Scores", add = "reg.line", 
+          conf.int = TRUE, cor.coef = TRUE, cor.method = "pearson", 
+          xlab = "Minutes_Spent", ylab = "Scores", title = "Time Spent & Scores have no correlation at Knowledge Check 1")
+```
+
+```{r combining_level_5_rows}
+# Combine all the scores for Knowledge Check 2
+level5_1 <- dat.kc2[, c('Level 5_Mechanics', 'Level 5_Mechanics_Time Spend')]
+level5_2 <- dat.kc2[, c('Level 5_Momentum', 'Level 5_Momentum_Time Spend')]
+level5_3 <- dat.kc2[, c('Level 5_Gravity', 'Level 5_Gravity_Time Spend')]
+level5_4 <- dat.kc2[, c('Level 5_Electricity', 'Level 5_Electricity_Time Spend')]
+level5_5 <- dat.kc2[, c('Level 5_Magnetism', 'Level 5_Magnetism_Time Spend')]
+level5_6 <- dat.kc2[, c('Level 5_Relativity', 'Level 5_Relativity_Time Spend')]
+dat.kc.reshape5 <- rbindlist(l = list(level5_1, level5_2, level5_3, level5_4, level5_5, level5_6), fill = FALSE)
+dat.kc.reshape5 <- setnames(dat.kc.reshape5, 
+                            old = c('Level 5_Mechanics','Level 5_Mechanics_Time Spend'), 
+                            new = c('Scores','Time_Spent'))
+
+# Draw the plot with regression line
+ggscatter(dat.kc.reshape5, x = "Time_Spent", y = "Scores", add = "reg.line", 
+          conf.int = TRUE, cor.coef = TRUE, cor.method = "pearson", xlab = "Minutes_Spent", ylab = "Scores", 
+          title = "Time Spent & Scores may have negative correlation at Knowledge Check 2")
+```
+
+
+```{r question8, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Summary of Scores
+
+```{r summary_of_scores}
+# Get the information of each score item
+hw1 <- summarize.hw.class(dat.grades, "Homework Grade_Mechanics")
+hw2 <- summarize.hw.class(dat.grades, "Homework Grade_Momentum")
+hw3 <- summarize.hw.class(dat.grades, "Homework Grade_Gravity")
+hw4 <- summarize.hw.class(dat.grades, "Homework Grade_Electricity")
+hw5 <- summarize.hw.class(dat.grades, "Homework Grade_Magnetism")
+hw6 <- summarize.hw.class(dat.grades, "Homework Grade_Relativity")
+mid_score <- summarize.hw.class(dat.grades, "Midterm")
+final_score <- summarize.hw.class(dat.grades, "Final Exam")
+total_score <- summarize.hw.class(dat.grades, "Total Score")
+
+# Combine the results into one table and round the numeric variables
+summary_grades <- rbindlist(l = list(hw1, hw2, hw3, hw4, hw5, hw6, mid_score, final_score, total_score))
+summary_grades <- summary_grades[, lapply(X = .SD, FUN = "round.numerics", digits = 2)]
+
+# Display the table through the datatable function in DT
+datatable(data = summary_grades, rownames = FALSE)
+```
+
+```{r question9, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Correlations with Outcomes
+
+```{r compute_new_variables}
+# Add the new outcome variable of "Homework Average" (we've had the other three outcomes in "dat")
+dat <- dat[, Homework_Avg:= lapply(X = .SD, FUN = mean), by = id.name, .SDcols = homework.topics]
+
+# Add the new predictor variable of "Total Minutes Spent"
+dat <- dat[, Min_Spent_Total:= lapply(X = .SD, FUN = sum), by = id.name, .SDcols = total.min.spent]
+
+# Add the new predictor variable of "Average Score on Level 5 Check"
+dat <- dat[, Score_Level5_Avg:= lapply(X = .SD, FUN = mean), by = id.name, .SDcols = score.kc2.names]
+```
+
+```{r cor_outcomes_inputs}
+# Compute the correlation matrix for the outcomes and inputs
+outcomes_inputs <- dat[, c("Level", "Min_Spent_Total", "Score_Level5_Avg",
+                           "Homework_Avg", "Midterm", "Final Exam", "Total Score")]
+correlations <- data.table(cor(outcomes_inputs, use = "complete.obs"))
+
+# Round the results, add a heading column, and then display by datatable function
+correlations <- correlations[, lapply(X = .SD, FUN = "round.numerics", digits = 2)]
+correlations <- data.table(Outcomes = c("Level", "Min_Spent_Total", "Score_Level5_Avg", "Homework_Avg", 
+                                        "Midterm", "Final Exam", "Total Score"), correlations)
+datatable(correlations, rownames = FALSE)
+```
+
+```{r question10, echo=FALSE, eval=TRUE}
+question.counter <- question.counter + 1
+```
+
+## Qualitative and Quantitative Conclusions
+
+```{r cor_plot}
+# Present the results in a clearer way by drawing a correlation plot
+corrpl <- cor(outcomes_inputs, use = "complete.obs")
+corrplot(corrpl, method = "number", type = "lower", title = "Correlations between predictors and outcomes")
+```
+
+**Comment:** To evaluation the effectiveness of the digital system, two aspects shall be inspected: the time spent and the scores got on the system:
+
+**1)** Based on the correlations between the Min_Spent_Total and the outcomes (Homework_Avg, Midterm, Final Exam, Total Score), we could tell that no better scores related to the time spent in the digital system. Rather, the time spent even has a minor negative correlation with the homework performance.
+
+**2)** From the scores perspective, we could see that the scores got on the system at Level 5 has minor correlations to the Final Exam (0.21), and to the Total Score (0.23). Yet these relationships are not as strong as the correlations between the Prior Knowledge Level and the Final/ Total Score (0.32).
+
+In conclusion, based on the given dataset, the digital system that the students used **does not have strong positive impact** on the students' performance (homework, mid/final exam, and total score), and spending more time on the system might negatively impact students' homework grade. Therefore, I recommend that the school should consider improve the design of the system or change to another one.
